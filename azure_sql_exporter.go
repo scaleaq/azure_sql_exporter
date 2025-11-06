@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"sync"
 
-	"gopkg.in/yaml.v2"
+	yaml "gopkg.in/yaml.v2"
 
 	_ "github.com/denisenkom/go-mssqldb"
 	"github.com/prometheus/client_golang/prometheus"
@@ -91,7 +91,7 @@ func (e *Exporter) scrapeDatabase(d Database) {
 		e.mutex.Lock()
 		defer e.mutex.Unlock()
 		log.Errorf("Failed to access database %s: %s", d, err)
-		e.dbUp.WithLabelValues(d.Server, d.Name).Set(0)
+		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(0)
 		return
 	}
 	defer conn.Close()
@@ -102,18 +102,36 @@ func (e *Exporter) scrapeDatabase(d Database) {
 		e.mutex.Lock()
 		defer e.mutex.Unlock()
 		log.Errorf("Failed to query database %s: %s", d, err)
-		e.dbUp.WithLabelValues(d.Server, d.Name).Set(0)
+		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(0)
 		return
 	}
+	queryupdability := "SELECT DATABASEPROPERTYEX(DB_NAME(), 'Updateability') AS Updateability;"
+	var updateability string
+	err = conn.QueryRow(queryupdability).Scan(&updateability)
+	if err != nil {
+		e.mutex.Lock()
+		defer e.mutex.Unlock()
+		log.Errorf("Failed to query database %s: %s", d, err)
+		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(0)
+		return
+	}
+	if d.Intent == "ReadOnly" && updateability != "READ_ONLY" {
+		e.mutex.Lock()
+		defer e.mutex.Unlock()
+		log.Infof("Database %s is not read-only as expected, skipping metrics collection.", d.Name)
+		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(0)
+		return
+	}
+	log.Infof("Database %s updateability: %s", d.Name, updateability)
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
-	e.cpuPercent.WithLabelValues(d.Server, d.Name).Set(cpu)
-	e.dataIO.WithLabelValues(d.Server, d.Name).Set(data)
-	e.logIO.WithLabelValues(d.Server, d.Name).Set(logio)
-	e.memoryPercent.WithLabelValues(d.Server, d.Name).Set(memory)
-	e.workPercent.WithLabelValues(d.Server, d.Name).Set(worker)
-	e.sessionPercent.WithLabelValues(d.Server, d.Name).Set(session)
-	e.dbUp.WithLabelValues(d.Server, d.Name).Set(1)
+	e.cpuPercent.WithLabelValues(d.Server, d.Name, d.Intent).Set(cpu)
+	e.dataIO.WithLabelValues(d.Server, d.Name, d.Intent).Set(data)
+	e.logIO.WithLabelValues(d.Server, d.Name, d.Intent).Set(logio)
+	e.memoryPercent.WithLabelValues(d.Server, d.Name, d.Intent).Set(memory)
+	e.workPercent.WithLabelValues(d.Server, d.Name, d.Intent).Set(worker)
+	e.sessionPercent.WithLabelValues(d.Server, d.Name, d.Intent).Set(session)
+	e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(1)
 }
 
 // Database represents a MS SQL database connection.
@@ -122,17 +140,18 @@ type Database struct {
 	Server   string
 	User     string
 	Password string
+	Intent   string
 	Port     uint
 }
 
 // DSN returns the data source name as a string for the DB connection.
 func (d Database) DSN() string {
-	return fmt.Sprintf("server=%s;user id=%s;password=%s;port=%d;database=%s", d.Server, d.User, d.Password, d.Port, d.Name)
+	return fmt.Sprintf("server=%s;user id=%s;password=%s;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Password, d.Port, d.Name, d.Intent)
 }
 
 // DSN returns the data source name as a string for the DB connection with the password hidden for safe log output.
 func (d Database) String() string {
-	return fmt.Sprintf("server=%s;user id=%s;password=******;port=%d;database=%s", d.Server, d.User, d.Port, d.Name)
+	return fmt.Sprintf("server=%s;user id=%s;password=******;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Port, d.Name, d.Intent)
 }
 
 // Config contains all the required information for connecting to the databases.
@@ -151,6 +170,16 @@ func NewConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("unable to unmarshal file %s: %s", path, err)
 	}
+	// Duplicate each database entry for both intents: ReadOnly and ReadWrite
+	var dbs []Database
+	for _, db := range config.Databases {
+		readonly := db
+		readonly.Intent = "ReadOnly"
+		readwrite := db
+		readwrite.Intent = "ReadWrite"
+		dbs = append(dbs, readonly, readwrite)
+	}
+	config.Databases = dbs
 	return config, nil
 }
 
@@ -161,7 +190,7 @@ func newGuageVec(metricsName, docString string) *prometheus.GaugeVec {
 			Name:      metricsName,
 			Help:      docString,
 		},
-		[]string{"server", "database"},
+		[]string{"server", "database", "intent"},
 	)
 }
 

@@ -26,4 +26,4 @@ format:
 
 .PHONY: docker
 docker:
-	docker build -t benclapp/azure_sql_exporter:$(VERSION) -t benclapp/azure_sql_exporter:latest .
+	docker build -t scaleaq/azure_sql_exporter:$(VERSION) -t scaleaq/azure_sql_exporter:latest .
