@@ -41,6 +41,10 @@ type Exporter struct {
 	dataIO         *prometheus.GaugeVec
 	logIO          *prometheus.GaugeVec
 	memoryPercent  *prometheus.GaugeVec
+	instanceCpu    *prometheus.GaugeVec
+	instanceMemory *prometheus.GaugeVec
+	storageUsed    *prometheus.GaugeVec
+	storageAlloc   *prometheus.GaugeVec
 	workPercent    *prometheus.GaugeVec
 	sessionPercent *prometheus.GaugeVec
 	dbUp           *prometheus.GaugeVec
@@ -55,6 +59,10 @@ func NewExporter(database Database) *Exporter {
 		dataIO:         newGuageVec("data_io", "Average I/O utilization in percentage based on the limit of the service tier."),
 		logIO:          newGuageVec("log_io", "Average write resource utilization in percentage of the limit of the service tier."),
 		memoryPercent:  newGuageVec("memory_percent", "Average Memory Usage In Percent"),
+		instanceCpu:    newGuageVec("instance_cpu_percent", "Average CPU Percent for the entire instance."),
+		instanceMemory: newGuageVec("instance_memory_percent", "Average Memory Percent for the entire instance."),
+		storageUsed:    newGuageVec("storage_used_mb", "Storage used in MB."),
+		storageAlloc:   newGuageVec("storage_allocated_mb", "Storage allocated in MB."),
 		workPercent:    newGuageVec("worker_percent", "Maximum concurrent workers (requests) in percentage based on the limit of the database’s service tier."),
 		sessionPercent: newGuageVec("session_percent", "Maximum concurrent sessions in percentage based on the limit of the database’s service tier."),
 		dbUp:           newGuageVec("db_up", "Is the database is accessible."),
@@ -69,6 +77,10 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.dataIO.Describe(ch)
 	e.logIO.Describe(ch)
 	e.memoryPercent.Describe(ch)
+	e.instanceCpu.Describe(ch)
+	e.instanceMemory.Describe(ch)
+	e.storageUsed.Describe(ch)
+	e.storageAlloc.Describe(ch)
 	e.workPercent.Describe(ch)
 	e.sessionPercent.Describe(ch)
 	e.dbUp.Describe(ch)
@@ -106,6 +118,10 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.dataIO.Collect(ch)
 	e.logIO.Collect(ch)
 	e.memoryPercent.Collect(ch)
+	e.instanceCpu.Collect(ch)
+	e.instanceMemory.Collect(ch)
+	e.storageUsed.Collect(ch)
+	e.storageAlloc.Collect(ch)
 	e.workPercent.Collect(ch)
 	e.sessionPercent.Collect(ch)
 	e.dbUp.Collect(ch)
@@ -192,9 +208,9 @@ func (e *Exporter) scrapeDatabase(d Database) {
 		return
 	}
 	defer conn.Close()
-	query := "SELECT TOP 1 avg_cpu_percent, avg_data_io_percent, avg_log_write_percent, avg_memory_usage_percent, max_session_percent, max_worker_percent FROM sys.dm_db_resource_stats ORDER BY end_time DESC"
-	var cpu, data, logio, memory, session, worker float64
-	err = conn.QueryRow(query).Scan(&cpu, &data, &logio, &memory, &session, &worker)
+	query := "SELECT TOP 1 avg_cpu_percent, avg_data_io_percent, avg_log_write_percent, avg_memory_usage_percent, avg_instance_cpu_percent, avg_instance_memory_percent, used_storage_mb, allocated_storage_mb, max_session_percent, max_worker_percent FROM sys.dm_db_resource_stats ORDER BY end_time DESC"
+	var cpu, data, logio, memory, instanceCpu, instanceMemory, storageUsed, storageAllocated, session, worker float64
+	err = conn.QueryRow(query).Scan(&cpu, &data, &logio, &memory, &instanceCpu, &instanceMemory, &storageUsed, &storageAllocated, &session, &worker)
 	if err != nil {
 		e.mutex.Lock()
 		defer e.mutex.Unlock()
@@ -226,6 +242,10 @@ func (e *Exporter) scrapeDatabase(d Database) {
 	e.dataIO.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(data)
 	e.logIO.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(logio)
 	e.memoryPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(memory)
+	e.instanceCpu.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(instanceCpu)
+	e.instanceMemory.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(instanceMemory)
+	e.storageUsed.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(storageUsed)
+	e.storageAlloc.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(storageAllocated)
 	e.workPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(worker)
 	e.sessionPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(session)
 	e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(1)
