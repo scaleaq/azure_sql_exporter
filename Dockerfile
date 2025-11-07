@@ -2,7 +2,7 @@ FROM alpine:latest AS certificates
 RUN apk update && apk add --no-cache ca-certificates && update-ca-certificates
 
 
-FROM golang:1.12 AS builder
+FROM golang:1.25 AS builder
 ADD . /go/src/github.com/iamseth/azure_sql_exporter
 WORKDIR /go/src/github.com/iamseth/azure_sql_exporter
 RUN CGO_ENABLED=0 go build -ldflags "-X main.Version=$(cat VERSION)"
