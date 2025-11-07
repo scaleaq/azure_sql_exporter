@@ -5,21 +5,25 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"sync"
+	"time"
 
 	yaml "gopkg.in/yaml.v2"
 
 	_ "github.com/microsoft/go-mssqldb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/log"
 )
 
 var (
 	// Version of azure_sql_exporter. Set at build time.
 	Version = "0.0.0.dev"
 
+	logLevel      = flag.String("log.level", "info", "Log level: debug, info, warn, error")
 	listenAddress = flag.String("web.listen-address", ":9139", "Address to listen on for web interface and telemetry.")
 	metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
 	configFile    = flag.String("config.file", "./config.yaml", "Specify the config file with the database credentials.")
@@ -29,7 +33,8 @@ const namespace = "azure_sql"
 
 // Exporter implements prometheus.Collector.
 type Exporter struct {
-	dbs            []Database
+	sourceDB       Database
+	discoveredDBs  []Database
 	mutex          sync.RWMutex
 	up             prometheus.Gauge
 	cpuPercent     *prometheus.GaugeVec
@@ -42,9 +47,9 @@ type Exporter struct {
 }
 
 // NewExporter returns an initialized MS SQL Exporter.
-func NewExporter(dbs []Database) *Exporter {
-	return &Exporter{
-		dbs:            dbs,
+func NewExporter(database Database) *Exporter {
+	e := &Exporter{
+		sourceDB:       database,
 		up:             newGuage("up", "Was the last scrape of Azure SQL successful."),
 		cpuPercent:     newGuageVec("cpu_percent", "Average compute utilization in percentage of the limit of the service tier."),
 		dataIO:         newGuageVec("data_io", "Average I/O utilization in percentage based on the limit of the service tier."),
@@ -54,6 +59,8 @@ func NewExporter(dbs []Database) *Exporter {
 		sessionPercent: newGuageVec("session_percent", "Maximum concurrent sessions in percentage based on the limit of the database’s service tier."),
 		dbUp:           newGuageVec("db_up", "Is the database is accessible."),
 	}
+	go e.runDiscovery(time.Hour)
+	return e
 }
 
 // Describe describes all the metrics exported by the MS SQL exporter.
@@ -70,10 +77,29 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect fetches the stats from MS SQL and delivers them as Prometheus metrics. It implements prometheus.Collector.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
-	for _, db := range e.dbs {
-		log.Debugf("Scraping %s", db.String())
-		go e.scrapeDatabase(db)
+	e.mutex.RLock()
+	dbs := make([]Database, len(e.discoveredDBs))
+	copy(dbs, e.discoveredDBs)
+	e.mutex.RUnlock()
+
+	if len(dbs) == 0 {
+		slog.Warn("No databases discovered yet, skipping scrape.")
+		e.up.Set(0)
+		ch <- e.up
+		return
 	}
+
+	var wg sync.WaitGroup
+	for _, db := range dbs {
+		wg.Add(1)
+		go func(d Database) {
+			slog.Debug("Scraping", "connection_string", db.String())
+			defer wg.Done()
+			e.scrapeDatabase(d)
+		}(db)
+	}
+	wg.Wait()
+
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	e.cpuPercent.Collect(ch)
@@ -84,6 +110,76 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.sessionPercent.Collect(ch)
 	e.dbUp.Collect(ch)
 	e.up.Set(1)
+	ch <- e.up
+}
+
+func (e *Exporter) runDiscovery(interval time.Duration) {
+	discover := func() {
+		slog.Info("Running database discovery.")
+		dbs, err := e.discoverDatabases()
+		if err != nil {
+			slog.Error("Failed to discover databases.", "err", err)
+			return
+		}
+
+		e.mutex.Lock()
+		e.discoveredDBs = dbs
+		e.mutex.Unlock()
+		slog.Info("Discovery complete.", "db_count", len(dbs)/2)
+	}
+
+	// Initial discovery
+	discover()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		discover()
+	}
+}
+
+// Connect to discovery db and look up all databases
+func (e *Exporter) discoverDatabases() ([]Database, error) {
+	conn, err := sql.Open("mssql", e.sourceDB.DSN())
+	if err != nil {
+		return nil, fmt.Errorf("Failed to connect to discovery database %s: %w", e.sourceDB, err)
+	}
+	defer conn.Close()
+
+	// Find all databases including elastic pool and edition information
+	query := "SELECT d.name, dso.elastic_pool_name, dso.edition FROM sys.databases d INNER JOIN sys.database_service_objectives dso ON d.database_id = dso.database_id WHERE d.Name <> 'master' ORDER BY d.name;"
+	rows, err := conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read databases from %s: %w", e.sourceDB, err)
+	}
+	defer rows.Close()
+
+	var discoveredDBs []Database
+	for rows.Next() {
+		var dbName, dbPool, dbEdition string
+		err = rows.Scan(&dbName, &dbPool, &dbEdition)
+		if err != nil {
+			slog.Error("Failed to scan database.", "err", err)
+			continue
+		}
+
+		// Create ReadOnly and ReadWrite variants for each discovered database
+		readonlyVariant := Database{
+			Name:     dbName,
+			Pool:     dbPool,
+			Edition:  dbEdition,
+			Server:   e.sourceDB.Server,
+			User:     e.sourceDB.User,
+			Password: e.sourceDB.Password,
+			Port:     e.sourceDB.Port,
+			Intent:   "ReadOnly",
+		}
+		readwriteVariant := readonlyVariant
+		readwriteVariant.Intent = "ReadWrite"
+
+		discoveredDBs = append(discoveredDBs, readonlyVariant, readwriteVariant)
+	}
+	return discoveredDBs, nil
 }
 
 func (e *Exporter) scrapeDatabase(d Database) {
@@ -91,8 +187,8 @@ func (e *Exporter) scrapeDatabase(d Database) {
 	if err != nil {
 		e.mutex.Lock()
 		defer e.mutex.Unlock()
-		log.Errorf("Failed to access database %s: %s", d, err)
-		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(0)
+		slog.Error("Failed to access database %s: %s", d, err)
+		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(0)
 		return
 	}
 	defer conn.Close()
@@ -102,8 +198,8 @@ func (e *Exporter) scrapeDatabase(d Database) {
 	if err != nil {
 		e.mutex.Lock()
 		defer e.mutex.Unlock()
-		log.Errorf("Failed to query database %s: %s", d, err)
-		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(0)
+		slog.Error("Failed to query database %s: %s", d, err)
+		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(0)
 		return
 	}
 	queryupdability := "SELECT DATABASEPROPERTYEX(DB_NAME(), 'Updateability') AS Updateability;"
@@ -112,33 +208,35 @@ func (e *Exporter) scrapeDatabase(d Database) {
 	if err != nil {
 		e.mutex.Lock()
 		defer e.mutex.Unlock()
-		log.Errorf("Failed to query database %s: %s", d, err)
-		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(0)
+		slog.Error("Failed to query database %s: %s", d, err)
+		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(0)
 		return
 	}
 	if d.Intent == "ReadOnly" && updateability != "READ_ONLY" {
 		e.mutex.Lock()
 		defer e.mutex.Unlock()
-		log.Infof("Database %s is not read-only as expected, skipping metrics collection.", d.Name)
-		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(0)
+		slog.Info("Database is not accessible read-only as expected, skipping metrics collection.", "db_name", d.Name)
+		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(0)
 		return
 	}
-	log.Infof("Database %s updateability: %s", d.Name, updateability)
+	slog.Debug("Database updateability info.", "db_name", d.Name, "updatability", updateability)
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
-	e.cpuPercent.WithLabelValues(d.Server, d.Name, d.Intent).Set(cpu)
-	e.dataIO.WithLabelValues(d.Server, d.Name, d.Intent).Set(data)
-	e.logIO.WithLabelValues(d.Server, d.Name, d.Intent).Set(logio)
-	e.memoryPercent.WithLabelValues(d.Server, d.Name, d.Intent).Set(memory)
-	e.workPercent.WithLabelValues(d.Server, d.Name, d.Intent).Set(worker)
-	e.sessionPercent.WithLabelValues(d.Server, d.Name, d.Intent).Set(session)
-	e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent).Set(1)
+	e.cpuPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(cpu)
+	e.dataIO.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(data)
+	e.logIO.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(logio)
+	e.memoryPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(memory)
+	e.workPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(worker)
+	e.sessionPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(session)
+	e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(1)
 }
 
 // Database represents a MS SQL database connection.
 type Database struct {
 	Name     string
 	Server   string
+	Pool     string
+	Edition  string
 	User     string
 	Password string
 	Intent   string
@@ -157,7 +255,7 @@ func (d Database) String() string {
 
 // Config contains all the required information for connecting to the databases.
 type Config struct {
-	Databases []Database
+	DBServer Database `yaml:"dbserver"`
 }
 
 // NewConfig creates an instance of Config from a local YAML file.
@@ -171,16 +269,10 @@ func NewConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("unable to unmarshal file %s: %s", path, err)
 	}
-	// Duplicate each database entry for both intents: ReadOnly and ReadWrite
-	var dbs []Database
-	for _, db := range config.Databases {
-		readonly := db
-		readonly.Intent = "ReadOnly"
-		readwrite := db
-		readwrite.Intent = "ReadWrite"
-		dbs = append(dbs, readonly, readwrite)
+	// Set default port if not specified
+	if config.DBServer.Port == 0 {
+		config.DBServer.Port = 1433
 	}
-	config.Databases = dbs
 	return config, nil
 }
 
@@ -191,7 +283,7 @@ func newGuageVec(metricsName, docString string) *prometheus.GaugeVec {
 			Name:      metricsName,
 			Help:      docString,
 		},
-		[]string{"server", "database", "intent"},
+		[]string{"server", "database", "intent", "elastic_pool", "edition"},
 	)
 }
 
@@ -207,11 +299,32 @@ func newGuage(metricsName, docString string) prometheus.Gauge {
 
 func main() {
 	flag.Parse()
+
+	var theLogLevel slog.Level
+	switch *logLevel {
+	case "debug":
+		theLogLevel = slog.LevelDebug
+	case "info":
+		theLogLevel = slog.LevelInfo
+	case "warn":
+		theLogLevel = slog.LevelWarn
+	case "error":
+		theLogLevel = slog.LevelError
+	default:
+		theLogLevel = slog.LevelInfo
+		slog.Warn("Unknown log level specified, defaulting to info", "level", *logLevel)
+	}
+	logHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: theLogLevel,
+	})
+	logger := slog.New(logHandler)
+	slog.SetDefault(logger)
 	config, err := NewConfig(*configFile)
 	if err != nil {
-		log.Fatalf("Cannot open config file %s: %s", *configFile, err)
+		slog.Error("Cannot open config file", "path", *configFile, "error", err)
+		os.Exit(1)
 	}
-	exporter := NewExporter(config.Databases)
+	exporter := NewExporter(config.DBServer)
 	prometheus.MustRegister(exporter)
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +337,6 @@ func main() {
                 </html>
               `))
 	})
-	log.Infof("Starting Server: %s", *listenAddress)
+	slog.Info("Starting Server", "addr", *listenAddress)
 	log.Fatal(http.ListenAndServe(*listenAddress, nil))
 }

@@ -1,9 +1,8 @@
 # Azure SQL Exporter
 
-[![Build Status](https://travis-ci.org/iamseth/azure_sql_exporter.svg)](https://travis-ci.org/iamseth/azure_sql_exporter)
 [![Build Status](https://github.com/scaleaq/azure_sql_exporter/actions/workflows/docker-build.yaml/badge.svg)](https://github.com/scaleaq/azure_sql_exporter/actions/workflows/docker-build.yaml)
 [![GoDoc](https://godoc.org/github.com/scaleaq/azure_sql_exporter?status.svg)](http://godoc.org/github.com/scaleaq/azure_sql_exporter)
-[![Report card](https://goreportcard.com/badge/github.com/scaleaq/azure_sql_exporter)](https://goreportcard.com/badge/github.com/scaleaq/azure_sql_exporter)
+[![Report card](https://goreportcard.com/badge/github.com/scaleaq/azure_sql_exporter)](https://goreportcard.com/github.com/scaleaq/azure_sql_exporter)
 
 [Prometheus](https://prometheus.io/) exporter for Azure SQL metrics. See [this post](https://azure.microsoft.com/en-us/blog/azure-sql-database-introduces-new-near-real-time-performance-metrics/) for details.
 
@@ -31,23 +30,19 @@ Usage of azure_sql_exporter:
 
 This exporter requires a configuration file. By default, it will look for the config.yaml file in the CWD and can be specified with the -config.file parameter.
 
-The file is in YAML format and contains the information for connecting to the databases you want to export. This file will contain sensitive information so make sure your configuration management locks down access to this file (chmod [46]00) and it is encouraged to create an SQL user with the least amount of privilege.
+The file is in YAML format and contains the information for connecting to a discover database on a database server, usually the `master` database.
+This file will contain sensitive information so make sure your configuration management locks down access to this file (chmod [46]00) and it is encouraged to create an SQL user with the least amount of privilege.
+Note that discovery requires the `##MS_ServerStateReader##` permission.
 
 ```yaml
-databases:
-  - name: Sales
-    user: prometheus
-    port: 1433
-    password: str0ngP@sswordG0esHere
-    server: salesdb.database.windows.net
-
-  - name: Inventory
-    user: prometheus
-    port: 1433
-    password: str0ngP@sswordG0esHere
-    server: inventorydb.database.windows.net
+dbserver:
+  name: master # the discovery database
+  user: prometheus
+  port: 1433
+  password: str0ngP@sswordG0esHere
+  server: salesdb.database.windows.net
 ```
 
 ## Docker images
 
-Pre-compiled docker images are available as [packages](https://github.com/orgs/scaleaq/packages?repo_name=azure_sql_exporter).
+Pre-compiled docker images are available as [packages](https://github.com/orgs/scaleaq/packages?repo_name=azure_sql_exporter) from `ghcr.io`.

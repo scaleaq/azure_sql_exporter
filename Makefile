@@ -12,6 +12,10 @@ BINARY := azure_sql_exporter-$(VERSION).$(SUFFIX)
 	mkdir -p ./dist
 	go build $(GOFLAGS) -o $@
 
+.PHONY: run
+run: clean ./dist/$(BINARY)
+	./dist/$(BINARY) -log.level=debug
+
 .PHONY: clean
 clean:
 	rm -rf ./dist
