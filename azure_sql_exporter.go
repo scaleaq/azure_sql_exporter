@@ -10,8 +10,9 @@ import (
 
 	yaml "gopkg.in/yaml.v2"
 
-	_ "github.com/denisenkom/go-mssqldb"
+	_ "github.com/microsoft/go-mssqldb"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/log"
 )
 
@@ -212,7 +213,7 @@ func main() {
 	}
 	exporter := NewExporter(config.Databases)
 	prometheus.MustRegister(exporter)
-	http.Handle(*metricsPath, prometheus.Handler())
+	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
                 <head><title>Azure SQL Exporter</title></head>
