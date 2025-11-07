@@ -337,6 +337,6 @@ func main() {
                 </html>
               `))
 	})
-	slog.Info("Starting Server", "addr", *listenAddress)
+	slog.Info("Starting Server", "version", Version, "addr", *listenAddress)
 	log.Fatal(http.ListenAndServe(*listenAddress, nil))
 }
