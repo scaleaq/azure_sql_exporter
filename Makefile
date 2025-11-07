@@ -1,4 +1,4 @@
-VERSION := 0.1.1
+VERSION := $(shell cat VERSION)
 
 LDFLAGS := -X main.Version=$(VERSION)
 GOFLAGS := -ldflags "$(LDFLAGS)"
@@ -12,17 +12,13 @@ BINARY := azure_sql_exporter-$(VERSION).$(SUFFIX)
 	mkdir -p ./dist
 	go build $(GOFLAGS) -o $@
 
-.PHONY: test
-test:
-	go test -v -race $$(go list ./... | grep -v /vendor/)
-
 .PHONY: clean
 clean:
 	rm -rf ./dist
 
 .PHONY: format
 format:
-	find . -name "*.go" |grep -v vendor | xargs goimports -w
+	find . -name "*.go" | xargs goimports -w
 
 .PHONY: docker
 docker:

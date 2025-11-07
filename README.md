@@ -1,32 +1,30 @@
 # Azure SQL Exporter
 
 [![Build Status](https://travis-ci.org/iamseth/azure_sql_exporter.svg)](https://travis-ci.org/iamseth/azure_sql_exporter)
-[![GoDoc](https://godoc.org/github.com/iamseth/azure_sql_exporter?status.svg)](http://godoc.org/github.com/iamseth/azure_sql_exporter)
-[![Report card](https://goreportcard.com/badge/github.com/iamseth/azure_sql_exporter)](https://goreportcard.com/badge/github.com/iamseth/azure_sql_exporter)
+[![Build Status](https://github.com/scaleaq/azure_sql_exporter/actions/workflows/docker-build.yaml/badge.svg)](https://github.com/scaleaq/azure_sql_exporter/actions/workflows/docker-build.yaml)
+[![GoDoc](https://godoc.org/github.com/scaleaq/azure_sql_exporter?status.svg)](http://godoc.org/github.com/scaleaq/azure_sql_exporter)
+[![Report card](https://goreportcard.com/badge/github.com/scaleaq/azure_sql_exporter)](https://goreportcard.com/badge/github.com/scaleaq/azure_sql_exporter)
 
 [Prometheus](https://prometheus.io/) exporter for Azure SQL metrics. See [this post](https://azure.microsoft.com/en-us/blog/azure-sql-database-introduces-new-near-real-time-performance-metrics/) for details.
+
+This is a fork from [iamseth](https://github.com/iamseth/azure_sql_exporter) and [benclapp](https://github.com/benclapp/azure_sql_exporter).
 
 Metrics are collected from each database using SQL so this could easily be modified or extended to support SQL Server though it may have better metrics exporting natively than through SQL.
 
 Databases are only queries when fetching /metrics from the exporter so that you may control the interval from your scrape_config section in Prometheus.
 
-## Install
-
-```bash
-go get -u github.com/iamseth/azure_sql_exporter
-```
-
 ## Usage
+
 ```bash
 Usage of azure_sql_exporter:
   -config.file string
-    	Specify the config file with the database credentials. (default "./config.yaml")
+     Specify the config file with the database credentials. (default "./config.yaml")
   -log.level value
-    	Only log messages with the given severity or above. Valid levels: [debug, info, warn, error, fatal, panic]. (default info)
+     Only log messages with the given severity or above. Valid levels: [debug, info, warn, error, fatal, panic]. (default info)
   -web.listen-address string
-    	Address to listen on for web interface and telemetry. (default ":9139")
+     Address to listen on for web interface and telemetry. (default ":9139")
   -web.telemetry-path string
-    	Path under which to expose metrics. (default "/metrics")
+     Path under which to expose metrics. (default "/metrics")
 ```
 
 ## Configuration
@@ -50,15 +48,6 @@ databases:
     server: inventorydb.database.windows.net
 ```
 
+## Docker images
 
-## Binary releases
-
-Pre-compiled versions may be found in the [release section](https://github.com/iamseth/azure_sql_exporter/releases).
-
-## Docker
-
-A Dockerfile is provided, or images are available on [Docker Hub](https://hub.docker.com/r/benclapp/azure_sql_exporter/). For example:
-
-```bash
-docker run -d -p 9139:9139 -v ./config.yaml:/config/config.yaml benclapp/azure_sql_exporter:latest -config.file /config/config.yaml
-```
+Pre-compiled docker images are available as [packages](https://github.com/orgs/scaleaq/packages?repo_name=azure_sql_exporter).
