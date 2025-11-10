@@ -112,8 +112,8 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	}
 	wg.Wait()
 
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
+	e.mutex.RLock()
+	defer e.mutex.RUnlock()
 	e.cpuPercent.Collect(ch)
 	e.dataIO.Collect(ch)
 	e.logIO.Collect(ch)
@@ -139,8 +139,22 @@ func (e *Exporter) runDiscovery(interval time.Duration) {
 		}
 
 		e.mutex.Lock()
+		defer e.mutex.Unlock()
+
+		// Reset all gauge vectors to remove metrics for databases that might have been deleted.
+		e.cpuPercent.Reset()
+		e.dataIO.Reset()
+		e.logIO.Reset()
+		e.memoryPercent.Reset()
+		e.instanceCpu.Reset()
+		e.instanceMemory.Reset()
+		e.storageUsed.Reset()
+		e.storageAlloc.Reset()
+		e.workPercent.Reset()
+		e.sessionPercent.Reset()
+		e.dbUp.Reset()
+
 		e.discoveredDBs = dbs
-		e.mutex.Unlock()
 		slog.Info("Discovery complete.", "db_count", len(dbs)/2)
 	}
 
@@ -201,10 +215,10 @@ func (e *Exporter) discoverDatabases() ([]Database, error) {
 func (e *Exporter) scrapeDatabase(d Database) {
 	conn, err := sql.Open("mssql", d.DSN())
 	if err != nil {
+		slog.Error("Failed to access database", "db_name", d.Name, "err", err)
 		e.mutex.Lock()
-		defer e.mutex.Unlock()
-		slog.Error("Failed to access database %s: %s", d, err)
 		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(0)
+		e.mutex.Unlock()
 		return
 	}
 	defer conn.Close()
@@ -212,30 +226,31 @@ func (e *Exporter) scrapeDatabase(d Database) {
 	var cpu, data, logio, memory, instanceCpu, instanceMemory, storageUsed, storageAllocated, session, worker float64
 	err = conn.QueryRow(query).Scan(&cpu, &data, &logio, &memory, &instanceCpu, &instanceMemory, &storageUsed, &storageAllocated, &session, &worker)
 	if err != nil {
+		slog.Error("Failed to access database", "db_name", d.Name, "err", err)
 		e.mutex.Lock()
-		defer e.mutex.Unlock()
-		slog.Error("Failed to query database %s: %s", d, err)
 		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(0)
+		e.mutex.Unlock()
 		return
 	}
 	queryupdability := "SELECT DATABASEPROPERTYEX(DB_NAME(), 'Updateability') AS Updateability;"
 	var updateability string
 	err = conn.QueryRow(queryupdability).Scan(&updateability)
 	if err != nil {
+		slog.Error("Failed to access database", "db_name", d.Name, "err", err)
 		e.mutex.Lock()
-		defer e.mutex.Unlock()
-		slog.Error("Failed to query database %s: %s", d, err)
 		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(0)
+		e.mutex.Unlock()
 		return
 	}
 	if d.Intent == "ReadOnly" && updateability != "READ_ONLY" {
-		e.mutex.Lock()
-		defer e.mutex.Unlock()
 		slog.Info("Database is not accessible read-only as expected, skipping metrics collection.", "db_name", d.Name)
+		e.mutex.Lock()
 		e.dbUp.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(0)
+		e.mutex.Unlock()
 		return
 	}
 	slog.Debug("Database updateability info.", "db_name", d.Name, "updatability", updateability)
+
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	e.cpuPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(cpu)
