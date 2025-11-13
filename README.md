@@ -28,19 +28,36 @@ Usage of azure_sql_exporter:
 
 ## Configuration
 
-This exporter requires a configuration file. By default, it will look for the config.yaml file in the CWD and can be specified with the -config.file parameter.
+This exporter requires a configuration file.
+By default, it will look for the config.yaml file in the CWD
+and can be specified with the -config.file parameter.
 
-The file is in YAML format and contains the information for connecting to a discover database on a database server, usually the `master` database.
-This file will contain sensitive information so make sure your configuration management locks down access to this file (chmod [46]00) and it is encouraged to create an SQL user with the least amount of privilege.
-Note that discovery requires the `##MS_ServerStateReader##` permission.
+The file is in YAML format and contains the information for connecting
+to a discover database on a database server, usually the `master` database.
+
+For backwards compatibility, this file can contain sensitive information,
+so it should be protected accordingly.
+
+The exporter requires the server roles `##MS_DatabaseConnector##` and `##MS_ServerStateReader##`.
 
 ```yaml
 dbserver:
   name: master # the discovery database
   user: prometheus
   port: 1433
+
   password: str0ngP@sswordG0esHere
   server: salesdb.database.windows.net
+```
+
+or better use [Workload Identity](https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview?tabs=go#service-account-annotations)
+with an annotated service account.
+
+```yaml
+dbserver:
+  name: master # the discovery database
+  server: salesdb.database.windows.net
+  workloadidentity: true
 ```
 
 ## Docker images

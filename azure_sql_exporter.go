@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"log/slog"
 	"net/http"
@@ -41,7 +40,7 @@ type Exporter struct {
 	dataIO         *prometheus.GaugeVec
 	logIO          *prometheus.GaugeVec
 	memoryPercent  *prometheus.GaugeVec
-	instanceCpu    *prometheus.GaugeVec
+	instanceCPU    *prometheus.GaugeVec
 	instanceMemory *prometheus.GaugeVec
 	storageUsed    *prometheus.GaugeVec
 	storageAlloc   *prometheus.GaugeVec
@@ -59,7 +58,7 @@ func NewExporter(database Database) *Exporter {
 		dataIO:         newGuageVec("data_io", "Average I/O utilization in percentage based on the limit of the service tier."),
 		logIO:          newGuageVec("log_io", "Average write resource utilization in percentage of the limit of the service tier."),
 		memoryPercent:  newGuageVec("memory_percent", "Average Memory Usage In Percent"),
-		instanceCpu:    newGuageVec("instance_cpu_percent", "Average CPU Percent for the entire instance."),
+		instanceCPU:    newGuageVec("instance_cpu_percent", "Average CPU Percent for the entire instance."),
 		instanceMemory: newGuageVec("instance_memory_percent", "Average Memory Percent for the entire instance."),
 		storageUsed:    newGuageVec("storage_used_mb", "Storage used in MB."),
 		storageAlloc:   newGuageVec("storage_allocated_mb", "Storage allocated in MB."),
@@ -77,7 +76,7 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.dataIO.Describe(ch)
 	e.logIO.Describe(ch)
 	e.memoryPercent.Describe(ch)
-	e.instanceCpu.Describe(ch)
+	e.instanceCPU.Describe(ch)
 	e.instanceMemory.Describe(ch)
 	e.storageUsed.Describe(ch)
 	e.storageAlloc.Describe(ch)
@@ -118,7 +117,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.dataIO.Collect(ch)
 	e.logIO.Collect(ch)
 	e.memoryPercent.Collect(ch)
-	e.instanceCpu.Collect(ch)
+	e.instanceCPU.Collect(ch)
 	e.instanceMemory.Collect(ch)
 	e.storageUsed.Collect(ch)
 	e.storageAlloc.Collect(ch)
@@ -146,7 +145,7 @@ func (e *Exporter) runDiscovery(interval time.Duration) {
 		e.dataIO.Reset()
 		e.logIO.Reset()
 		e.memoryPercent.Reset()
-		e.instanceCpu.Reset()
+		e.instanceCPU.Reset()
 		e.instanceMemory.Reset()
 		e.storageUsed.Reset()
 		e.storageAlloc.Reset()
@@ -172,7 +171,7 @@ func (e *Exporter) runDiscovery(interval time.Duration) {
 func (e *Exporter) discoverDatabases() ([]Database, error) {
 	conn, err := sql.Open("mssql", e.sourceDB.DSN())
 	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to discovery database %s: %w", e.sourceDB, err)
+		return nil, fmt.Errorf("failed to connect to discovery database %s: %w", e.sourceDB, err)
 	}
 	defer conn.Close()
 
@@ -223,8 +222,8 @@ func (e *Exporter) scrapeDatabase(d Database) {
 	}
 	defer conn.Close()
 	query := "SELECT TOP 1 avg_cpu_percent, avg_data_io_percent, avg_log_write_percent, avg_memory_usage_percent, avg_instance_cpu_percent, avg_instance_memory_percent, used_storage_mb, allocated_storage_mb, max_session_percent, max_worker_percent FROM sys.dm_db_resource_stats ORDER BY end_time DESC"
-	var cpu, data, logio, memory, instanceCpu, instanceMemory, storageUsed, storageAllocated, session, worker float64
-	err = conn.QueryRow(query).Scan(&cpu, &data, &logio, &memory, &instanceCpu, &instanceMemory, &storageUsed, &storageAllocated, &session, &worker)
+	var cpu, data, logio, memory, instanceCPU, instanceMemory, storageUsed, storageAllocated, session, worker float64
+	err = conn.QueryRow(query).Scan(&cpu, &data, &logio, &memory, &instanceCPU, &instanceMemory, &storageUsed, &storageAllocated, &session, &worker)
 	if err != nil {
 		slog.Error("Failed to access database", "db_name", d.Name, "err", err)
 		e.mutex.Lock()
@@ -257,7 +256,7 @@ func (e *Exporter) scrapeDatabase(d Database) {
 	e.dataIO.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(data)
 	e.logIO.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(logio)
 	e.memoryPercent.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(memory)
-	e.instanceCpu.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(instanceCpu)
+	e.instanceCPU.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(instanceCPU)
 	e.instanceMemory.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(instanceMemory)
 	e.storageUsed.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(storageUsed)
 	e.storageAlloc.WithLabelValues(d.Server, d.Name, d.Intent, d.Pool, d.Edition).Set(storageAllocated)
@@ -268,24 +267,33 @@ func (e *Exporter) scrapeDatabase(d Database) {
 
 // Database represents a MS SQL database connection.
 type Database struct {
-	Name     string
-	Server   string
-	Pool     string
-	Edition  string
-	User     string
-	Password string
-	Intent   string
-	Port     uint
+	Name             string
+	Server           string
+	Pool             string
+	Edition          string
+	User             string
+	Password         string
+	Intent           string
+	WorkloadIdentity bool
+	Port             uint
 }
 
 // DSN returns the data source name as a string for the DB connection.
 func (d Database) DSN() string {
-	return fmt.Sprintf("server=%s;user id=%s;password=%s;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Password, d.Port, d.Name, d.Intent)
+	if d.WorkloadIdentity {
+		return fmt.Sprintf("qlserver://%s?database=%s&fedauth=ActiveDirectoryWorkloadIdentity&ApplicationIntent=%s", d.Server, d.Name, d.Intent)
+	} else {
+		return fmt.Sprintf("server=%s;user id=%s;password=%s;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Password, d.Port, d.Name, d.Intent)
+	}
 }
 
-// DSN returns the data source name as a string for the DB connection with the password hidden for safe log output.
+// String returns the data source name as a string for the DB connection with the password hidden for safe log output.
 func (d Database) String() string {
-	return fmt.Sprintf("server=%s;user id=%s;password=******;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Port, d.Name, d.Intent)
+	if d.WorkloadIdentity {
+		return fmt.Sprintf("qlserver://%s?database=%s&fedauth=ActiveDirectoryWorkloadIdentity&ApplicationIntent=%s", d.Server, d.Name, d.Intent)
+	} else {
+		return fmt.Sprintf("server=%s;user id=%s;password=******;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Port, d.Name, d.Intent)
+	}
 }
 
 // Config contains all the required information for connecting to the databases.
@@ -295,7 +303,7 @@ type Config struct {
 
 // NewConfig creates an instance of Config from a local YAML file.
 func NewConfig(path string) (Config, error) {
-	fh, err := ioutil.ReadFile(path)
+	fh, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("unable to read file %s: %s", path, err)
 	}
