@@ -51,7 +51,7 @@ dbserver:
 ```
 
 or better use [Workload Identity](https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview?tabs=go#service-account-annotations)
-with an annotated service account.
+with an annotated service account and set the environment variable `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`.
 
 ```yaml
 dbserver:

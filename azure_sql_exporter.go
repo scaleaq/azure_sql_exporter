@@ -14,6 +14,7 @@ import (
 	yaml "gopkg.in/yaml.v2"
 
 	_ "github.com/microsoft/go-mssqldb"
+	"github.com/microsoft/go-mssqldb/azuread"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -169,14 +170,14 @@ func (e *Exporter) runDiscovery(interval time.Duration) {
 
 // Connect to discovery db and look up all databases
 func (e *Exporter) discoverDatabases() ([]Database, error) {
-	conn, err := sql.Open("mssql", e.sourceDB.DSN())
+	conn, err := sql.Open(azuread.DriverName, e.sourceDB.DSN())
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to discovery database %s: %w", e.sourceDB, err)
 	}
 	defer conn.Close()
 
 	// Find all databases including elastic pool and edition information
-	query := "SELECT d.name, dso.elastic_pool_name, dso.edition FROM sys.databases d INNER JOIN sys.database_service_objectives dso ON d.database_id = dso.database_id WHERE d.Name <> 'master' ORDER BY d.name;"
+	query := "SELECT d.name, isnull(dso.elastic_pool_name,'') AS 'elastic_pool_name', dso.edition FROM sys.databases d INNER JOIN sys.database_service_objectives dso ON d.database_id = dso.database_id WHERE d.Name <> 'master' ORDER BY d.name;"
 	rows, err := conn.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read databases from %s: %w", e.sourceDB, err)
@@ -194,14 +195,15 @@ func (e *Exporter) discoverDatabases() ([]Database, error) {
 
 		// Create ReadOnly and ReadWrite variants for each discovered database
 		readonlyVariant := Database{
-			Name:     dbName,
-			Pool:     dbPool,
-			Edition:  dbEdition,
-			Server:   e.sourceDB.Server,
-			User:     e.sourceDB.User,
-			Password: e.sourceDB.Password,
-			Port:     e.sourceDB.Port,
-			Intent:   "ReadOnly",
+			Name:             dbName,
+			Pool:             dbPool,
+			Edition:          dbEdition,
+			Server:           e.sourceDB.Server,
+			User:             e.sourceDB.User,
+			Password:         e.sourceDB.Password,
+			Port:             e.sourceDB.Port,
+			WorkloadIdentity: e.sourceDB.WorkloadIdentity,
+			Intent:           "ReadOnly",
 		}
 		readwriteVariant := readonlyVariant
 		readwriteVariant.Intent = "ReadWrite"
@@ -212,7 +214,7 @@ func (e *Exporter) discoverDatabases() ([]Database, error) {
 }
 
 func (e *Exporter) scrapeDatabase(d Database) {
-	conn, err := sql.Open("mssql", d.DSN())
+	conn, err := sql.Open(azuread.DriverName, d.DSN())
 	if err != nil {
 		slog.Error("Failed to access database", "db_name", d.Name, "err", err)
 		e.mutex.Lock()
@@ -281,7 +283,7 @@ type Database struct {
 // DSN returns the data source name as a string for the DB connection.
 func (d Database) DSN() string {
 	if d.WorkloadIdentity {
-		return fmt.Sprintf("sqlserver://%s?database=%s&fedauth=ActiveDirectoryWorkloadIdentity&ApplicationIntent=%s", d.Server, d.Name, d.Intent)
+		return fmt.Sprintf("server=%s;database=%s;fedauth=ActiveDirectoryWorkloadIdentity;ApplicationIntent=%s", d.Server, d.Name, d.Intent)
 	} else {
 		return fmt.Sprintf("server=%s;user id=%s;password=%s;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Password, d.Port, d.Name, d.Intent)
 	}
@@ -290,7 +292,7 @@ func (d Database) DSN() string {
 // String returns the data source name as a string for the DB connection with the password hidden for safe log output.
 func (d Database) String() string {
 	if d.WorkloadIdentity {
-		return fmt.Sprintf("sqlserver://%s?database=%s&fedauth=ActiveDirectoryWorkloadIdentity&ApplicationIntent=%s", d.Server, d.Name, d.Intent)
+		return fmt.Sprintf("server=%s;database=%s;fedauth=ActiveDirectoryWorkloadIdentity;ApplicationIntent=%s", d.Server, d.Name, d.Intent)
 	} else {
 		return fmt.Sprintf("server=%s;user id=%s;password=******;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Port, d.Name, d.Intent)
 	}
