@@ -281,7 +281,7 @@ type Database struct {
 // DSN returns the data source name as a string for the DB connection.
 func (d Database) DSN() string {
 	if d.WorkloadIdentity {
-		return fmt.Sprintf("qlserver://%s?database=%s&fedauth=ActiveDirectoryWorkloadIdentity&ApplicationIntent=%s", d.Server, d.Name, d.Intent)
+		return fmt.Sprintf("sqlserver://%s?database=%s&fedauth=ActiveDirectoryWorkloadIdentity&ApplicationIntent=%s", d.Server, d.Name, d.Intent)
 	} else {
 		return fmt.Sprintf("server=%s;user id=%s;password=%s;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Password, d.Port, d.Name, d.Intent)
 	}
@@ -290,7 +290,7 @@ func (d Database) DSN() string {
 // String returns the data source name as a string for the DB connection with the password hidden for safe log output.
 func (d Database) String() string {
 	if d.WorkloadIdentity {
-		return fmt.Sprintf("qlserver://%s?database=%s&fedauth=ActiveDirectoryWorkloadIdentity&ApplicationIntent=%s", d.Server, d.Name, d.Intent)
+		return fmt.Sprintf("sqlserver://%s?database=%s&fedauth=ActiveDirectoryWorkloadIdentity&ApplicationIntent=%s", d.Server, d.Name, d.Intent)
 	} else {
 		return fmt.Sprintf("server=%s;user id=%s;password=******;port=%d;database=%s;ApplicationIntent=%s", d.Server, d.User, d.Port, d.Name, d.Intent)
 	}
